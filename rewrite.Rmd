@@ -5,7 +5,7 @@ n1 = 3
 D1 = matrix(0, nrow = n1*n , ncol = n1*n)
 A = matrix(c(0.5,0.2,0,0,0.8,0,0,0.3,0.6))
 I_n1 = diag(n1)
-
+g
 
 build_D = function(A,n,n1) {
   # Any time varying parameters should be built in here using n exclusively
