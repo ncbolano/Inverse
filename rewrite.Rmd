@@ -1,0 +1,39 @@
+```{r}
+# global variables 
+n = 100
+n1 = 3
+D1 = matrix(0, nrow = n1*n , ncol = n1*n)
+A = matrix(c(0.5,0.2,0,0,0.8,0,0,0.3,0.6))
+I_n1 = diag(n1)
+
+
+build_D = function(A,n,n1) {
+  # Any time varying parameters should be built in here using n exclusively
+  ns1 = .3 + .5 * (1 + exp(.05 * (c(1:n)-  (n/2))))**(-1)
+  ns2 = -.2 - .5 * (1+exp(.05 * (c(1:n) - (n/2))))**(-1)
+  
+  # function which adds -t(A) blocks to an upper triangular cholesky decomposition
+  for(i in 1:(n-1)) {
+    A[1,1] = ns1[1]
+    A[2,1] = ns2[1]
+    current_index = n1 * (i-1) + 1
+    index = seq(current_index:(n1*i))
+    future_index = seq((current_index + n1):(n1*(i+1)))
+    D1[index,index] = I_n1
+    D1[index,future_index] = -t(A)
+  }
+  
+  # ensuring final block is identity
+  final_index = (((n-1)*n1)+1):(n*n1)
+  D1[final_index , final_index] = I_n1
+
+  return(D1)
+}
+
+test = build_D(A,n,n1)
+```
+
+```{r}
+d
+```
+
