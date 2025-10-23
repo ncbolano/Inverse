@@ -1,0 +1,9 @@
+# Goal - Generation of graphical model p values, adjustment using 
+              a) Two step BY adjustment
+              b) Global BY adjustment
+          subsequently, generate accuracy for graph recovery for method comparison
+
+```{r}
+
+```
+
