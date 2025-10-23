@@ -4,6 +4,40 @@
           subsequently, generate accuracy for graph recovery for method comparison
 
 ```{r}
+### Preliminary loading of functions
+require(tidyverse)
+source('variance_functions_SSR_v5.R')
+
+
+library(doParallel)
+cl<-makeCluster(16)
+print(detectCores())
+registerDoParallel(cl)
+
+### Check supply of prior arguments, else load default 
+args=(commandArgs(TRUE))
+
+if(length(args)==0){
+  print("No arguments supplied.")
+  ##supply default values
+  R <- 500 # number of replications
+  nu <- 2 # dimension of matrix
+  p <- 3 # dimension of time series
+  n <- 2^11
+  M<-30
+  TV_size=0.2
+  L=2
+  ks <- c((n / 2 + M), (n / 2 + M + 2 * M))
+  Kernel='Kernel_Triangular'
+  
+}else{
+  for(i in 1:length(args)){
+    eval(parse(text=args[[i]]))
+  }
+}
+```
+
+```{r}
 
 ```
 
