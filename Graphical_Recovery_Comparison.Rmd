@@ -38,6 +38,112 @@ if(length(args)==0){
 ```
 
 ```{r}
+Test_tibble_global <- Test_tibble |>
+  ungroup() |>
+  mutate(
+    # Create a combined vector of all Re and Im p-values for global adjustment
+    test_id = row_number()
+  )
+
+# Getting all p-values in one vector
+all_pvals = c(Test_tibble_global$Re, Test_tibble_global$Im)
+all_pvals_adjusted = p.adjust(all_pvals, method = "BY")
+```
+
+```{r}
+n_tests = nrow(Test_tibble_global)
+Test_tibble_global = Test_tibble_global |>
+  mutate(
+    Re_global_BY = all_pvals_adjusted[1:n_tests],
+    Im_global_BY = all_pvals_adjusted[(n_tests + 1):(2 * n_tests)],
+    # Take minimum of the two globally adjusted p-values
+    global_BY_min = pmin(Re_global_BY, Im_global_BY)
+  )
+```
+
+```{r}
+Test_tibble_twostep = Test_tibble |>
+  group_by(a, c, r, k) |>
+  mutate(
+    # Step 1: Within-group BY adjustment across replications
+    n_in_group = n(),
+    group_pvals = list(c(Re, Im)),
+    group_adjusted = list(p.adjust(unlist(group_pvals), method = "BY"))
+  ) |>
+  rowwise() |>
+  mutate(
+    # Extract the adjusted values for this observation
+    Re_step1_BY = group_adjusted[[which(row_number() == 1:n_in_group)]],
+    Im_step1_BY = group_adjusted[[which(row_number() == 1:n_in_group) + n_in_group]],
+    # Take minimum within group
+    step1_min = min(Re_step1_BY, Im_step1_BY)
+  ) |>
+  ungroup() |>
+  select(-group_pvals, -group_adjusted, -n_in_group) |>
+  # Step 2: Adjust the minimums across all groups
+  mutate(
+    twostep_BY = p.adjust(step1_min, method = "BY")
+  )
+
+Test_tibble_twostep = Test_tibble |>
+  group_by(a, c, r, k) |>
+  mutate(
+    # Step 1: Within each (a,c,r,k) group, adjust all Re and Im values together
+    all_group_pvals = list(c(Re, Im)),
+    all_group_adjusted = list(p.adjust(unlist(all_group_pvals), method = "BY")),
+    group_size = n()
+  ) |>
+  ungroup()
+
+# Extract adjusted values properly
+temp_list = Test_tibble_twostep |>
+  group_by(a, c, r, k) |>
+  summarise(
+    adjusted_pvals = list(p.adjust(c(Re, Im), method = "BY")),
+    n_reps = n(),
+    .groups = "drop"
+  )
+
+# Reconstruct with proper adjusted values
+Test_tibble_twostep = Test_tibble |>
+  left_join(temp_list, by = c("a", "c", "r", "k")) |>
+  group_by(a, c, r, k) |>
+  mutate(
+    idx = row_number(),
+    Re_step1_BY = adjusted_pvals[[1]][idx],
+    Im_step1_BY = adjusted_pvals[[1]][idx + n_reps],
+    step1_min = pmin(Re_step1_BY, Im_step1_BY)
+  ) |>
+  ungroup() |>
+  select(-adjusted_pvals, -n_reps, -idx) |>
+  # Step 2: Adjust the minimums across ALL tests
+  mutate(
+    twostep_BY = p.adjust(step1_min, method = "BY")
+  )
+
+# ==============================================================================
+# COMBINE RESULTS
+# ==============================================================================
+Test_tibble_final = Test_tibble |>
+  left_join(
+    Test_tibble_global |> select(a, c, r, k, i, global_BY_min),
+    by = c("a", "c", "r", "k", "i")
+  ) |>
+  left_join(
+    Test_tibble_twostep |> select(a, c, r, k, i, twostep_BY),
+    by = c("a", "c", "r", "k", "i")
+  )
+
+#Re_global_BY, Im_global_BY, global_BY_min)
+```
+
+```{r}
+### Truth of the graphical model
+### (1,2) (2,3) connections , (1,1) time varying
+
+connect_12 = TRUE
+connect_23 = TRUE
+connect_self_1 = TRUE
 
 ```
 
