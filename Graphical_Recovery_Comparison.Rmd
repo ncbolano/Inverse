@@ -4,38 +4,13 @@
           subsequently, generate accuracy for graph recovery for method comparison
 
 ```{r}
-### Preliminary loading of functions
+### Prelim function loading
 require(tidyverse)
 source('variance_functions_SSR_v5.R')
+closeAllConnections()
 
-
-library(doParallel)
-cl<-makeCluster(16)
-print(detectCores())
-registerDoParallel(cl)
-
-### Check supply of prior arguments, else load default 
-args=(commandArgs(TRUE))
-
-if(length(args)==0){
-  print("No arguments supplied.")
-  ##supply default values
-  R <- 500 # number of replications
-  nu <- 2 # dimension of matrix
-  p <- 3 # dimension of time series
-  n <- 2^11
-  M<-30
-  TV_size=0.2
-  L=2
-  ks <- c((n / 2 + M), (n / 2 + M + 2 * M))
-  Kernel='Kernel_Triangular'
-  
-}else{
-  for(i in 1:length(args)){
-    eval(parse(text=args[[i]]))
-  }
-}
 ```
+
 
 ```{r}
 Test_tibble_global = Test_tibble |>
@@ -70,7 +45,6 @@ Test_tibble_global = Test_tibble |>
 ```
 
 ```{r}
-library(dplyr)
 
 # Step 1: Within each (a, c, r, k, i) group, adjust Re and Im p-values jointly
 Test_tibble_twostep = Test_tibble |>
@@ -116,7 +90,7 @@ graph_recovery = Test_tibble_final |>
                        any(a == 2 & c == 1 & global_BY_min < alpha) ,
     global_detect_23 = any(a == 2 & c == 3 & global_BY_min < alpha) | 
                        any(a == 3 & c == 2 & global_BY_min < alpha),
-    global_detect_11_tv = any(a == 1 & c == 1 & r > 1 & global_BY_min < alpha),
+    global_detect_11_tv = any(a == 1 & c == 1 & r > 0 & global_BY_min < alpha),
     
     # Count number of significant edges (excluding diagonal)
     global_n_edges = nrow(distinct(data.frame(
@@ -134,7 +108,7 @@ graph_recovery = Test_tibble_final |>
                         any(a == 2 & c == 1 & global_BY_min < alpha),
     twostep_detect_23 = any(a == 2 & c == 3 & twostep_BY < alpha) |
                         any(a == 3 & c == 2 & twostep_BY < alpha),
-    twostep_detect_11_tv = any(a == 1 & c == 1 & r > 1 & twostep_BY < alpha),
+    twostep_detect_11_tv = any(a == 1 & c == 1 & r > 0 & twostep_BY < alpha),
     
     # Count number of significant edges for two-step
     twostep_n_edges = nrow(distinct(data.frame(
@@ -185,13 +159,13 @@ overall_accuracy = tibble(
     mean(accuracy_summary$twostep_perfect)
   ),
   
-  # All true edges detected (but may have false positives)
+  # All true edges detected (but can still have false positives)
   All_True_Detected = c(
     mean(accuracy_summary$global_all_true_detected),
     mean(accuracy_summary$twostep_all_true_detected)
   ),
   
-  # Individual edge detection rates
+  # edge detection rates by pair
   Detect_12 = c(
     mean(accuracy_summary$global_detect_12),
     mean(accuracy_summary$twostep_detect_12)
@@ -206,19 +180,19 @@ overall_accuracy = tibble(
     mean(accuracy_summary$global_detect_11_tv),
     mean(accuracy_summary$twostep_detect_11_tv)
   ),
-  # Average sensitivity (proportion of true edges detected)
+  # Sensitivity (proportion of true edges detected)
   Mean_Sensitivity = c(
     mean(accuracy_summary$global_sensitivity),
     mean(accuracy_summary$twostep_sensitivity)
   ),
   
-  # Average number of edges detected
+  # Mean number of detected edges
   Mean_N_Edges = c(
     mean(accuracy_summary$global_n_edges),
     mean(accuracy_summary$twostep_n_edges)
   ),
   
-  # False positive rate (extra edges beyond the 2 true off-diagonal ones)
+  # False positive rate (extra edges attributed)
   Mean_False_Positives = c(
     mean(pmax(0, accuracy_summary$global_n_edges - 2)),
     mean(pmax(0, accuracy_summary$twostep_n_edges - 2))
