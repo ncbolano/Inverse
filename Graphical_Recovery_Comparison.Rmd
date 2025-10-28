@@ -6,8 +6,13 @@
 ```{r}
 ### Prelim function loading
 require(tidyverse)
+library(dplyr)
+
 source('variance_functions_SSR_v5.R')
 closeAllConnections()
+
+Test_tibble = Test_tibble |> 
+  filter(a <= c)
 
 ```
 
@@ -26,7 +31,6 @@ all_pvals_adjusted = p.adjust(all_pvals, method = "BY")
 ```
 
 ```{r}
-library(dplyr)
 
 Test_tibble_global = Test_tibble |>
   group_by(i) |>
