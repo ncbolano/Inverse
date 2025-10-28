@@ -38,7 +38,7 @@ if(length(args)==0){
 ```
 
 ```{r}
-Test_tibble_global <- Test_tibble |>
+Test_tibble_global = Test_tibble |>
   ungroup() |>
   mutate(
     # Create a combined vector of all Re and Im p-values for global adjustment
@@ -51,79 +51,46 @@ all_pvals_adjusted = p.adjust(all_pvals, method = "BY")
 ```
 
 ```{r}
-n_tests = nrow(Test_tibble_global)
-Test_tibble_global = Test_tibble_global |>
-  mutate(
-    Re_global_BY = all_pvals_adjusted[1:n_tests],
-    Im_global_BY = all_pvals_adjusted[(n_tests + 1):(2 * n_tests)],
-    # Take minimum of the two globally adjusted p-values
-    global_BY_min = pmin(Re_global_BY, Im_global_BY)
-  )
+library(dplyr)
+
+Test_tibble_global = Test_tibble |>
+  group_by(i) |>
+  group_modify(\(df, key) {
+    all_pvals = c(df$Re, df$Im)
+    all_adj = p.adjust(all_pvals, method = "BY")
+    n_tests = nrow(df)
+    df$Re_global_BY = all_adj[1:n_tests]
+    df$Im_global_BY = all_adj[(n_tests + 1):(2 * n_tests)]
+    df$global_BY_min = pmin(df$Re_global_BY, df$Im_global_BY)
+    df
+  }) |>
+  ungroup()
+
+
 ```
 
 ```{r}
-Test_tibble_twostep = Test_tibble |>
-  group_by(a, c, r, k) |>
-  mutate(
-    # Step 1: Within-group BY adjustment across replications
-    n_in_group = n(),
-    group_pvals = list(c(Re, Im)),
-    group_adjusted = list(p.adjust(unlist(group_pvals), method = "BY"))
-  ) |>
-  rowwise() |>
-  mutate(
-    # Extract the adjusted values for this observation
-    Re_step1_BY = group_adjusted[[which(row_number() == 1:n_in_group)]],
-    Im_step1_BY = group_adjusted[[which(row_number() == 1:n_in_group) + n_in_group]],
-    # Take minimum within group
-    step1_min = min(Re_step1_BY, Im_step1_BY)
-  ) |>
-  ungroup() |>
-  select(-group_pvals, -group_adjusted, -n_in_group) |>
-  # Step 2: Adjust the minimums across all groups
-  mutate(
-    twostep_BY = p.adjust(step1_min, method = "BY")
-  )
+library(dplyr)
 
+# Step 1: Within each (a, c, r, k, i) group, adjust Re and Im p-values jointly
 Test_tibble_twostep = Test_tibble |>
-  group_by(a, c, r, k) |>
-  mutate(
-    # Step 1: Within each (a,c,r,k) group, adjust all Re and Im values together
-    all_group_pvals = list(c(Re, Im)),
-    all_group_adjusted = list(p.adjust(unlist(all_group_pvals), method = "BY")),
-    group_size = n()
-  ) |>
+  group_by(a, c, r, k, i) |>
+  group_modify(\(df, key) {
+    all_pvals = c(df$Re, df$Im)
+    all_adj = p.adjust(all_pvals, method = "BY")
+    n_tests = nrow(df)
+    df$Re_step1_BY = all_adj[1:n_tests]
+    df$Im_step1_BY = all_adj[(n_tests + 1):(2 * n_tests)]
+    df$step1_min = pmin(df$Re_step1_BY, df$Im_step1_BY)
+    df
+  }) |>
   ungroup()
 
-# Extract adjusted values properly
-temp_list = Test_tibble_twostep |>
-  group_by(a, c, r, k) |>
-  summarise(
-    adjusted_pvals = list(p.adjust(c(Re, Im), method = "BY")),
-    n_reps = n(),
-    .groups = "drop"
-  )
+# Step 2: Apply BY correction across all step1_min values
+Test_tibble_twostep = Test_tibble_twostep |>
+  mutate(twostep_BY = p.adjust(step1_min, method = "BY"))
 
-# Reconstruct with proper adjusted values
-Test_tibble_twostep = Test_tibble |>
-  left_join(temp_list, by = c("a", "c", "r", "k")) |>
-  group_by(a, c, r, k) |>
-  mutate(
-    idx = row_number(),
-    Re_step1_BY = adjusted_pvals[[1]][idx],
-    Im_step1_BY = adjusted_pvals[[1]][idx + n_reps],
-    step1_min = pmin(Re_step1_BY, Im_step1_BY)
-  ) |>
-  ungroup() |>
-  select(-adjusted_pvals, -n_reps, -idx) |>
-  # Step 2: Adjust the minimums across ALL tests
-  mutate(
-    twostep_BY = p.adjust(step1_min, method = "BY")
-  )
-
-# ==============================================================================
-# COMBINE RESULTS
-# ==============================================================================
+# Step 3: Merge with global BY results for comparison
 Test_tibble_final = Test_tibble |>
   left_join(
     Test_tibble_global |> select(a, c, r, k, i, global_BY_min),
@@ -134,16 +101,129 @@ Test_tibble_final = Test_tibble |>
     by = c("a", "c", "r", "k", "i")
   )
 
-#Re_global_BY, Im_global_BY, global_BY_min)
 ```
 
 ```{r}
 ### Truth of the graphical model
 ### (1,2) (2,3) connections , (1,1) time varying
 
-connect_12 = TRUE
-connect_23 = TRUE
-connect_self_1 = TRUE
+graph_recovery = Test_tibble_final |>
+  group_by(i) |>
+  summarise(
+    # For Global BY method
+    # Check if each true edge is detected (min p-value < alpha for any r)
+    global_detect_12 = any(a == 1 & c == 2 & global_BY_min < alpha) |
+                       any(a == 2 & c == 1 & global_BY_min < alpha) ,
+    global_detect_23 = any(a == 2 & c == 3 & global_BY_min < alpha) | 
+                       any(a == 3 & c == 2 & global_BY_min < alpha),
+    global_detect_11_tv = any(a == 1 & c == 1 & r > 1 & global_BY_min < alpha),
+    
+    # Count number of significant edges (excluding diagonal)
+    global_n_edges = nrow(distinct(data.frame(
+          a2 = pmin(a[a != c & global_BY_min < alpha],
+                c[a != c & global_BY_min < alpha]),
+          c2 = pmax(a[a != c & global_BY_min < alpha],
+                c[a != c & global_BY_min < alpha])
+          )
+        )
+      )
+,
+    
+    # For Two-Step BY method  
+    twostep_detect_12 = any(a == 1 & c == 2 & twostep_BY < alpha) |
+                        any(a == 2 & c == 1 & global_BY_min < alpha),
+    twostep_detect_23 = any(a == 2 & c == 3 & twostep_BY < alpha) |
+                        any(a == 3 & c == 2 & twostep_BY < alpha),
+    twostep_detect_11_tv = any(a == 1 & c == 1 & r > 1 & twostep_BY < alpha),
+    
+    # Count number of significant edges for two-step
+    twostep_n_edges = nrow(distinct(data.frame(
+          a2 = pmin(a[a != c & twostep_BY < alpha],
+                c[a != c & twostep_BY < alpha]),
+          c2 = pmax(a[a != c & twostep_BY < alpha],
+                c[a != c & twostep_BY < alpha])
+          )
+        )
+      ),
+    
+    .groups = "drop"
+  )
+```
+
+```{r}
+### Define true edge set here
+true_edges_set = c("(1,2)", "(2,1)" , "(2,3)", "(3,2)")  # Adjust based on your actual model
+true_edges_including_diag = c("(1,2)", "(2,1)" , "(2,3)", "(3,2)", "(1,1)")
+
+accuracy_summary = graph_recovery |>
+  mutate(
+    # Global BY: Perfect recovery if all true edges detected and no false positives
+    global_all_true_detected = global_detect_12 & global_detect_23 & global_detect_11_tv,
+    
+    # Check if ONLY the true edges are detected (perfect graph)
+    # In TVVAR3 case We expect 2 off-diagonal true edges: some combo of (1,2) and (3,2)
+    global_perfect = global_all_true_detected & (global_n_edges == 2),
+    
+    # Two-Step BY: Perfect recovery
+    twostep_all_true_detected = twostep_detect_12 & twostep_detect_23 & twostep_detect_11_tv,
+    
+    twostep_perfect = twostep_all_true_detected & (twostep_n_edges == 2),
+    
+    # Partial credit metrics
+    global_sensitivity = (global_detect_12 + global_detect_23 + global_detect_11_tv) / 3,
+    twostep_sensitivity = (twostep_detect_12 + twostep_detect_23 + twostep_detect_11_tv) / 3
+  )
+```
+
+```{r}
+overall_accuracy = tibble(
+  Method = c("Global BY", "Two-Step BY"),
+  
+  # Perfect graph recovery rate
+  Perfect_Recovery = c(
+    mean(accuracy_summary$global_perfect),
+    mean(accuracy_summary$twostep_perfect)
+  ),
+  
+  # All true edges detected (but may have false positives)
+  All_True_Detected = c(
+    mean(accuracy_summary$global_all_true_detected),
+    mean(accuracy_summary$twostep_all_true_detected)
+  ),
+  
+  # Individual edge detection rates
+  Detect_12 = c(
+    mean(accuracy_summary$global_detect_12),
+    mean(accuracy_summary$twostep_detect_12)
+  ),
+  
+  Detect_23 = c(
+    mean(accuracy_summary$global_detect_23),
+    mean(accuracy_summary$twostep_detect_23)
+  ),
+  
+  Detect_11_TV = c(
+    mean(accuracy_summary$global_detect_11_tv),
+    mean(accuracy_summary$twostep_detect_11_tv)
+  ),
+  # Average sensitivity (proportion of true edges detected)
+  Mean_Sensitivity = c(
+    mean(accuracy_summary$global_sensitivity),
+    mean(accuracy_summary$twostep_sensitivity)
+  ),
+  
+  # Average number of edges detected
+  Mean_N_Edges = c(
+    mean(accuracy_summary$global_n_edges),
+    mean(accuracy_summary$twostep_n_edges)
+  ),
+  
+  # False positive rate (extra edges beyond the 2 true off-diagonal ones)
+  Mean_False_Positives = c(
+    mean(pmax(0, accuracy_summary$global_n_edges - 2)),
+    mean(pmax(0, accuracy_summary$twostep_n_edges - 2))
+  )
+)
 
 ```
 
