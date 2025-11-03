@@ -1,0 +1,390 @@
+```{r}
+# ============================================================================
+# SETUP
+# ============================================================================
+require(tidyverse)
+source('variance_functions_SSR_v5.R')
+library(doParallel)
+
+# Set up parallel cluster
+cl <- makeCluster(16)
+print(detectCores())
+registerDoParallel(cl)
+
+# Output directory, would need to be adjusted for your own computer
+output_dir <- "C:/Users/noahb/Documents/Inverse/tvvar3_recovery"
+if(!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+```
+
+```{r}
+# ============================================================================
+# DEFINE PARAMETER GRID
+# ============================================================================
+# Define lists of values to iterate over
+n_list <- c(2^11, 2^12)
+M_list <- c(30, 60)
+TV_size_list <- c(0.2, 0.6)
+L_list <- c(1, 2)
+
+# For ks, we need to generate them based on n and M
+# So we'll create a function to generate ks given n and M
+generate_ks <- function(n, M) {
+  c((n / 2 + M), (n / 2 + M + 2 * M))
+}
+
+# Fixed parameters (change if needed)
+R <- 500
+nu <- 2
+p <- 3
+Kernel <- 'Kernel_Triangular'
+alpha <- .05
+burnin <- 500
+
+# Create parameter grid (excluding ks which depends on n and M)
+param_grid <- expand.grid(
+  n = n_list,
+  M = M_list,
+  TV_size = TV_size_list,
+  L = L_list,
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+sim.tvVAR <- function(burnin, m, TV_size) {
+  A <- matrix(c(0.5, 0.2, 0, 0, 0.8, 0, 0, 0.3, 0.6), ncol = 3, byrow = T)
+  n <- m + burnin
+  p <- 3
+  x <- matrix(rnorm(n * p), ncol = p)
+  x1 <- x
+  st <- 0.3 + TV_size * (1 + exp(0.005 * (c(1:n) - (n / 2))))^(-1)
+  for (tt in (2:n)) {
+    A.t <- A
+    A.t[1, 1] <- st[tt]  # Fixed indexing
+    temp <- A.t %*% matrix(x1[tt - 1, ], ncol = 1) + matrix(x[tt, ], ncol = 1)
+    x1[tt, ] <- c(temp)
+  }
+  x2 <- x1[-c(1:burnin), ]
+  return(x2)
+}
+
+r_to_loc <- function(r, c, a, nu, p) {
+  if (r < 0) {
+    return(p * (r + nu) + c)
+  }
+  if (r == 0 & c > a) {
+    return(p * nu + (c - 1))
+  }
+  if (r == 0 & c < a) {
+    return(p * nu + c)
+  }
+  if (r > 0) {
+    return(p * nu + (p - 1) + (r - 1) * p + c)
+  }
+}
+```
+
+```{r}
+# ============================================================================
+# MAIN SIMULATION FUNCTION
+# ============================================================================
+run_simulation <- function(n, M, TV_size, L, nu = 2, p = 3, R = 500,
+                           Kernel = 'Kernel_Triangular') {
+  
+  # Set up NEW parallel cluster for this simulation
+  cl <- makeCluster(16)
+  registerDoParallel(cl)
+  
+  # Export functions to workers
+  clusterExport(cl, c("sim.tvVAR", "r_to_loc", "generate_ks"), envir = environment())
+  clusterEvalQ(cl, {
+    source('variance_functions_SSR_v5.R')
+  })
+  
+  # Generate ks for this combination
+  ks <- generate_ks(n, M)
+  
+  # Calculate coefficient number
+  coefnum <- (p * 2 * nu + p - 1)
+  Kernel_function <- get(Kernel)
+  
+  # Export variables to workers
+  clusterExport(cl, c("n", "M", "TV_size", "L", "nu", "p", "ks", "coefnum", "Kernel_function"),
+                envir = environment())
+  
+  # Run parallel simulations
+  sim_Res <- foreach(i = icount(R), .combine = cbind, .inorder = FALSE,
+                     .errorhandling = "stop", .packages = c("tidyverse")) %dopar% {
+    
+    n_k <- length(ks)
+    betaCoefAll <- array(0, c(n_k, coefnum, p))
+    varbeta <- array(0, c(n_k, coefnum, 2, p))
+    varbetaAll <- array(0, c(n_k, 2 * coefnum, 2 * coefnum, p))
+    
+    x <- sim.tvVAR(burnin = 20, m = n, TV_size = TV_size)
+    JJ0 <- mvfft(x) / sqrt(nrow(x))
+    n_rows <- nrow(x)
+    backward <- c(((n_rows / 2) + 1):n_rows)
+    JJ <- rbind(JJ0[backward, ], JJ0[c(1:(n_rows / 2)), ])
+    delta <- 0
+    J <- JJ
+    
+    # Estimating beta coefficients
+    for (k in seq_along(ks)) {
+      for (i_p in 1:p) {
+        betaCoefAll[k, , i_p] <- beta(J, ks[k], nu, Kernel_function, M, a = i_p, delta = 0)
+        varbetaAll[k, , , i_p] <- variance.estimator.v2(J, ks[k], nu, Kernel_function, M, a = i_p, L, delta = 0)
+        varbeta[k, , 1, i_p] <- diag(varbetaAll[k, 1:coefnum, 1:coefnum, i_p])
+        varbeta[k, , 2, i_p] <- diag(varbetaAll[k, 1:coefnum + coefnum, 1:coefnum + coefnum, i_p])
+      }
+    }
+    list(betaCoefAll, varbetaAll, varbeta)
+  }
+  
+  # Process results
+  betaCoefAll <- sapply(sim_Res[1, ], function(x) x, simplify = 'array') |> aperm(c(4, 1:3))
+  varbetaAll <- sapply(sim_Res[2, ], function(x) x, simplify = 'array') |> aperm(c(5, 1:4))
+  varbeta <- sapply(sim_Res[3, ], function(x) x, simplify = 'array') |> aperm(c(5, 1:4))
+  
+  # Build Test_tibble
+  Test_tibble <- NULL
+  for (a in 1:p) {
+    for (c in 1:p) {
+      for (r in 0:(nu)) {
+        for (k in seq_along(ks)) {
+          if (!(a == c & r == 0)) {
+            loc <- r_to_loc(r, c, a, nu = nu, p = p)
+            tmp1 <- pnorm(abs(Re(betaCoefAll[, k, loc, a])) / sqrt(abs(varbeta[, k, loc, 1, a])), lower.tail = F) * 2
+            tmp2 <- pnorm(abs(Im(betaCoefAll[, k, loc, a])) / sqrt(abs(varbeta[, k, loc, 2, a])), lower.tail = F) * 2
+            tmp3 <- unlist(purrr::map2(tmp1, tmp2, function(x, y) min(p.adjust(c(x, y), method = "BY"))))
+            tmp4 <- sapply(1:R, function(i) {
+              tmp1_vec <- c(Re(betaCoefAll[i, k, loc, a]), Im(betaCoefAll[i, k, loc, a]))
+              matrix_tmp <- varbetaAll[i, k, c(loc, loc + coefnum), c(loc, loc + coefnum), a]
+              matrix_tmp[1, 2] <- 0  # Fixed indexing
+              matrix_tmp[2, 1] <- 0  # Fixed indexing
+              matrix_tmp <- abs(matrix_tmp)
+              return(pchisq(tmp1_vec %*% solve(matrix_tmp, b = tmp1_vec), lower.tail = F, df = 2))
+            })
+            Test_tibble <- cbind(Re = tmp1, Im = tmp2, padjust = tmp3, Chisq = tmp4) |>
+              as_tibble() |>
+              mutate(a = a, c = c, r = r, k = ks[k], i = 1:R) |>
+              rbind(Test_tibble)
+          }
+        }
+      }
+    }
+  }
+  stopCluster(cl)
+  Test_tibble <- Test_tibble |> 
+    mutate(n = n, M = M, nu = nu, TV_size = TV_size, Kernel = Kernel)
+  
+  return(Test_tibble)
+}
+
+```
+
+```{r}
+# ============================================================================
+# GRAPH RECOVERY FUNCTION 
+# ============================================================================
+
+graph_recovery <- function(Test_tibble, alpha = 0.05) {
+  
+  
+  # Filter to lower triangular
+  Test_tibble <- Test_tibble |>
+    filter(a <= c)
+  
+  # Global BY adjustment
+  Test_tibble_global <- Test_tibble |>
+    group_by(i) |>
+    group_modify(\(df, key) {
+      all_pvals <- c(df$Re, df$Im)
+      all_adj <- p.adjust(all_pvals, method = "BY")
+      n_tests <- nrow(df)
+      df$Re_global_BY <- all_adj[1:n_tests]
+      df$Im_global_BY <- all_adj[(n_tests + 1):(2 * n_tests)]
+      df$global_BY_min <- pmin(df$Re_global_BY, df$Im_global_BY)
+      df
+    }) |>
+    ungroup()
+  
+  # Two-step BY adjustment
+  # Step 1: Within each (a, c, r, k, i) group
+  Test_tibble_twostep <- Test_tibble |>
+    group_by(a, c, r, k, i) |>
+    group_modify(\(df, key) {
+      all_pvals <- c(df$Re, df$Im)
+      all_adj <- p.adjust(all_pvals, method = "BY")
+      n_tests <- nrow(df)
+      df$Re_step1_BY <- all_adj[1:n_tests]
+      df$Im_step1_BY <- all_adj[(n_tests + 1):(2 * n_tests)]
+      df$step1_min <- pmin(df$Re_step1_BY, df$Im_step1_BY)
+      df
+    }) |>
+    ungroup()
+  
+  # Step 2: Apply BY correction across all step1_min values
+  Test_tibble_twostep <- Test_tibble_twostep |>
+    mutate(twostep_BY = p.adjust(step1_min, method = "BY"))
+  
+  # Step 3: Merge results
+  Test_tibble_final <- Test_tibble |>
+    left_join(
+      Test_tibble_global |> select(a, c, r, k, i, global_BY_min),
+      by = c("a", "c", "r", "k", "i")
+    ) |>
+    left_join(
+      Test_tibble_twostep |> select(a, c, r, k, i, twostep_BY),
+      by = c("a", "c", "r", "k", "i")
+    )
+  
+  # Graph recovery metrics
+  graph_recovery_results <- Test_tibble_final |>
+    group_by(i) |>
+    summarise(
+      # For Global BY method
+      global_detect_12 = any(a == 1 & c == 2 & global_BY_min < alpha) |
+                         any(a == 2 & c == 1 & global_BY_min < alpha),
+      global_detect_23 = any(a == 2 & c == 3 & global_BY_min < alpha) |
+                         any(a == 3 & c == 2 & global_BY_min < alpha),
+      global_detect_11_tv = any(a == 1 & c == 1 & r > 0 & global_BY_min < alpha),
+      # Count number of significant edges (excluding diagonal)
+      global_n_edges = nrow(distinct(data.frame(
+        a2 = pmin(a[a != c & global_BY_min < alpha],
+                  c[a != c & global_BY_min < alpha]),
+        c2 = pmax(a[a != c & global_BY_min < alpha],
+                  c[a != c & global_BY_min < alpha])
+      ))),
+      # For Two-Step BY method
+      twostep_detect_12 = any(a == 1 & c == 2 & twostep_BY < alpha) |
+                          any(a == 2 & c == 1 & twostep_BY < alpha),
+      twostep_detect_23 = any(a == 2 & c == 3 & twostep_BY < alpha) |
+                          any(a == 3 & c == 2 & twostep_BY < alpha),
+      twostep_detect_11_tv = any(a == 1 & c == 1 & r > 0 & twostep_BY < alpha),
+      # Count number of significant edges for two-step
+      twostep_n_edges = nrow(distinct(data.frame(
+        a2 = pmin(a[a != c & twostep_BY < alpha],
+                  c[a != c & twostep_BY < alpha]),
+        c2 = pmax(a[a != c & twostep_BY < alpha],
+                  c[a != c & twostep_BY < alpha])
+      ))),
+      .groups = "drop"
+    )
+  
+  # Accuracy summary
+  accuracy_summary <- graph_recovery_results |>
+    mutate(
+      # Global BY: Perfect recovery
+      global_all_true_detected = global_detect_12 & global_detect_23 & global_detect_11_tv,
+      global_perfect = global_all_true_detected & (global_n_edges == 2),
+      # Two-Step BY: Perfect recovery
+      twostep_all_true_detected = twostep_detect_12 & twostep_detect_23 & twostep_detect_11_tv,
+      twostep_perfect = twostep_all_true_detected & (twostep_n_edges == 2),
+      # Partial credit metrics
+      global_sensitivity = (global_detect_12 + global_detect_23 + global_detect_11_tv) / 3,
+      twostep_sensitivity = (twostep_detect_12 + twostep_detect_23 + twostep_detect_11_tv) / 3
+    )
+  
+  # Overall accuracy metrics
+  overall_accuracy <- tibble(
+    Method = c("Global BY", "Two-Step BY"),
+    # Perfect graph recovery rate
+    Perfect_Recovery = c(
+      mean(accuracy_summary$global_perfect),
+      mean(accuracy_summary$twostep_perfect)
+    ),
+    # All true edges detected (but can still have false positives)
+    All_True_Detected = c(
+      mean(accuracy_summary$global_all_true_detected),
+      mean(accuracy_summary$twostep_all_true_detected)
+    ),
+    # Edge detection rates by pair
+    Detect_12 = c(
+      mean(accuracy_summary$global_detect_12),
+      mean(accuracy_summary$twostep_detect_12)
+    ),
+    Detect_23 = c(
+      mean(accuracy_summary$global_detect_23),
+      mean(accuracy_summary$twostep_detect_23)
+    ),
+    Detect_11_TV = c(
+      mean(accuracy_summary$global_detect_11_tv),
+      mean(accuracy_summary$twostep_detect_11_tv)
+    ),
+    # Sensitivity (proportion of true edges detected)
+    Mean_Sensitivity = c(
+      mean(accuracy_summary$global_sensitivity),
+      mean(accuracy_summary$twostep_sensitivity)
+    ),
+    # Mean number of detected edges
+    Mean_N_Edges = c(
+      mean(accuracy_summary$global_n_edges),
+      mean(accuracy_summary$twostep_n_edges)
+    ),
+    # False positive rate (extra edges attributed)
+    Mean_False_Positives = c(
+      mean(pmax(0, accuracy_summary$global_n_edges - 2)),
+      mean(pmax(0, accuracy_summary$twostep_n_edges - 2))
+    )
+  )
+  
+  return(overall_accuracy)
+}
+```
+
+```{r}
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
+cat("Starting parameter sweep...\n")
+cat("Total combinations:", nrow(param_grid), "\n\n")
+
+for (idx in 1:nrow(param_grid)) {
+  params <- param_grid[idx, ]
+  n <- params$n
+  M <- params$M
+  TV_size <- params$TV_size
+  L <- params$L
+  
+  filename <- sprintf('n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
+                      n, M, nu, L, TV_size, Kernel)
+  filepath <- file.path(output_dir, filename)
+  
+  if (file.exists(filepath)) {
+    cat(sprintf("[%d/%d] Skipping (already exists): %s\n", idx, nrow(param_grid), filename))
+    next
+  }
+  
+  cat(sprintf("[%d/%d] Running: n=%d, M=%d, TV_size=%.2f, L=%d\n",
+              idx, nrow(param_grid), n, M, TV_size, L))
+  
+  tryCatch({
+    cat("  - Starting parallel simulation...\n")
+    Test_tibble <- run_simulation(n = n, M = M, TV_size = TV_size, L = L,
+                                   nu = nu, p = p, R = R, Kernel = Kernel)
+    
+    cat("  - Starting graph recovery (sequential)...\n")
+    overall_accuracy <- graph_recovery(Test_tibble, alpha = alpha)
+    
+    cat("  - Saving results...\n")
+    saveRDS(overall_accuracy, file = filepath)
+    
+    cat(sprintf("  ✓ Saved: %s\n", filename))
+    print(overall_accuracy)
+    cat("\n")
+    
+  }, error = function(e) {
+    cat(sprintf("  ✗ Error: %s\n", e$message))
+    cat("\n")
+  })
+}
+
+cat("Parameter sweep complete!\n")
+cat("Results saved to:", output_dir, "\n")
+```
+
