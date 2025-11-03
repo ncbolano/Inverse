@@ -29,7 +29,7 @@ L_list = c(1, 2)
 # For ks, we need to generate them based on n and M
 # So we'll create a function to generate ks given n and M
 generate_ks = function(n, M) {
-  c((n / 2 + M), (n / 2 + M + 2 * M))
+  c(((n / 2) + 2 * M ) , (n - 2 * M))
 }
 
 # Fixed parameters (change if needed)
@@ -355,7 +355,7 @@ for (idx in 1:nrow(param_grid)) {
   TV_size = params$TV_size
   L = params$L
   
-  filename = sprintf('n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
+  filename = sprintf('k_2edges_n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
                       n, M, nu, L, TV_size, Kernel)
   filepath = file.path(output_dir, filename)
   
@@ -394,7 +394,7 @@ for (idx in 1:nrow(param_grid)) {
   # Add to master results (whether loaded or newly computed)
   if (!is.null(overall_accuracy)) {
     result_row = overall_accuracy |>
-      select(Method, Perfect_Recovery) |>
+      select(Method, Perfect_Recovery, Detect_11_TV , Detect_12, Detect_23) |>
       mutate(
         n = n,
         M = M,
@@ -409,22 +409,22 @@ for (idx in 1:nrow(param_grid)) {
     master_results = bind_rows(master_results, result_row)
   }
 }
-
+master_results_k2_edges = master_results[ , c(1:6)]
 # Save master results table
 master_results_file = file.path(output_dir, "master_results_table.rds")
-saveRDS(master_results, file = master_results_file)
+saveRDS(master_results_k2_edges, file = master_results_file)
 
 # Also save as CSV for easy viewing
 master_results_csv = file.path(output_dir, "master_results_table.csv")
-write_csv(master_results, file = master_results_csv)
+write_csv(master_results_k2_edges, file = master_results_csv)
 
 cat("Parameter sweep complete!\n")
 cat("Results saved to:", output_dir, "\n")
 cat("\n=== MASTER RESULTS TABLE (Perfect Recovery Only) ===\n")
-print(master_results)
+print(master_results_k2_edges)
 
 cat("\nMaster results saved to:\n")
 cat("  - RDS:", master_results_file, "\n")
-cat("  - CSV:", master_results_csv, "\n")
+cat("  - CSV:", master_results_csv, "\n")                                                                                                 
 ```
 
