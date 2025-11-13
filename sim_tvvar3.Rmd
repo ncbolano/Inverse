@@ -5,6 +5,8 @@
 require(tidyverse)
 source('variance_functions_SSR_v5.R')
 library(doParallel)
+library(dplyr)
+library(ggplot2)
 
 # Set up parallel cluster
 cl = makeCluster(16)
@@ -29,8 +31,11 @@ L_list = c(1, 2)
 # For ks, we need to generate them based on n and M
 # So we'll create a function to generate ks given n and M
 generate_ks = function(n, M) {
-  c(((n / 2) + 2 * M ) , (n - 2 * M))
+  return(chosen_ks)
+  #c(((n / 2) + 2 * M ))
 }
+
+
 
 # Fixed parameters (change if needed)
 R = 500
@@ -355,7 +360,7 @@ for (idx in 1:nrow(param_grid)) {
   TV_size = params$TV_size
   L = params$L
   
-  filename = sprintf('k_2edges_n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
+  filename = sprintf('ktest__n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
                       n, M, nu, L, TV_size, Kernel)
   filepath = file.path(output_dir, filename)
   
@@ -409,19 +414,19 @@ for (idx in 1:nrow(param_grid)) {
     master_results = bind_rows(master_results, result_row)
   }
 }
-master_results_k2_edges = master_results[ , c(1:6)]
+master_results_ktest = master_results[ , c(1:9)]
 # Save master results table
 master_results_file = file.path(output_dir, "master_results_table.rds")
-saveRDS(master_results_k2_edges, file = master_results_file)
+saveRDS(master_results_ktest, file = master_results_file)
 
 # Also save as CSV for easy viewing
 master_results_csv = file.path(output_dir, "master_results_table.csv")
-write_csv(master_results_k2_edges, file = master_results_csv)
+write_csv(master_results_ktest, file = master_results_csv)
 
 cat("Parameter sweep complete!\n")
 cat("Results saved to:", output_dir, "\n")
 cat("\n=== MASTER RESULTS TABLE (Perfect Recovery Only) ===\n")
-print(master_results_k2_edges)
+print(master_results_ktest)
 
 cat("\nMaster results saved to:\n")
 cat("  - RDS:", master_results_file, "\n")
