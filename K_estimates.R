@@ -166,7 +166,9 @@ composite_value = trace_periodogram / condition_number
 which.max(composite_value)
 
 composite_smooth = trace_smooth / condition_number_smooth
-return_max(composite_smooth ,M)
+chosen_freq = return_max(composite_smooth ,M)
+
+chosen_ks = chosen_freq / n
 
 
 
