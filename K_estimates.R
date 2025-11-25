@@ -1,34 +1,4 @@
-estimate_candidate_ks = function(x, M, num_candidates = 5) {
-  n = nrow(x)
-  p = ncol(x)
-  
-  # FFT
-  JJ = mvfft(x) / sqrt(n)
-  
-  # Smooth periodogram with your kernel
-  freq_grid = 1:floor(n/2)
-  scores = numeric(length(freq_grid))
-  
-  for (k in freq_grid) {
-    # Estimate S(k) using your kernel smoother
-    S_k = estimate_spectral_density(JJ, k, M, Kernel_function)
-    
-    # Score this frequency
-    trace_S = sum(diag(S_k))
-    eigenvals = eigen(S_k, only.values = TRUE)$values
-    cond_num = max(eigenvals) / min(eigenvals)
-    
-    scores[k] = trace_S / cond_num  # or another criterion
-  }
-  
-  # Select top peaks that are spaced apart
-  candidate_ks = select_spaced_peaks(scores, freq_grid, min_spacing = M, 
-                                     num_candidates)
-  
-  return(candidate_ks)
-}
-
-smoothed_spectral_density = function(JJ, k, M, Kernel_func = Kernel_Triangular) {
+smoothed_spectral_density = function(JJ, k, m, Kernel_func = Kernel_Triangular) {
   n = nrow(JJ)
   p = ncol(JJ)
   S_k = matrix(0 + 0i, p, p)  # Complex matrix
@@ -54,12 +24,12 @@ smoothed_spectral_density = function(JJ, k, M, Kernel_func = Kernel_Triangular) 
   return(S_k)
 }
 
-return_max = function(x, M) {
+return_max = function(x, m) {
   max1 = which.max(x)
   
   # Create a copy and set values within 2*M of max1 to -Inf
   x2 = x
-  min_dist = 2 * M
+  min_dist =  M
   
   # Set forbidden region to -Inf
   forbidden_indices = max(1, max1 - min_dist):min(length(x), max1 + min_dist)
@@ -77,6 +47,22 @@ return_max = function(x, M) {
   return(c(max1, max2))
 }
 
+sim.tvVAR = function(burnin, m, TV_size) {
+  A = matrix(c(0.5, 0.2, 0, 0, 0.8, 0, 0, 0.3, 0.6), ncol = 3, byrow = T)
+  n = m + burnin
+  p = 3
+  x = matrix(rnorm(n * p), ncol = p)
+  x1 = x
+  st = 0.3 + TV_size * (1 + exp(0.005 * (c(1:n) - (n / 2))))^(-1)
+  for (tt in (2:n)) {
+    A.t = A
+    A.t[1, 1] = st[tt]  # Fixed indexing
+    temp = A.t %*% matrix(x1[tt - 1, ], ncol = 1) + matrix(x[tt, ], ncol = 1)
+    x1[tt, ] = c(temp)
+  }
+  x2 = x1[-c(1:burnin), ]
+  return(x2)
+}
 
 library(ggplot2)
 # Trace example
@@ -85,11 +71,12 @@ nu <- 2 # dimension of matrix
 p <- 3 # dimension of time series
 n <- 2^12
 M<-30
-TV_size=0.2
+TV_size=0.6
+m = 8
 
 set.seed(123)
 n = 2048
-x = sim.tvVAR(burnin = 500, m = n)
+x = sim.tvVAR(burnin = 500, m = n, TV_size)
 
 # Compute FFT
 JJ = mvfft(x) / sqrt(nrow(x))
@@ -125,7 +112,7 @@ for (k in 1:n_freq) {
   condition_number[k] = max(eigenvals) / (min(eigenvals) + 1e-10)
   
   # Smoothed Periodogram (weighted by kernel)
-  S_k = smoothed_spectral_density(JJ, k, M, Kernel_Triangular)
+  S_k = smoothed_spectral_density(JJ, k, m, Kernel_Triangular)
   # Smoothed Versions
   trace_smooth[k] = sum(diag(S_k))
   diag_smooth[k, ] = diag(S_k)
@@ -149,7 +136,7 @@ plot_data = data.frame(
 )
 
 
-p1 <- ggplot(plot_data, aes(x = frequency, y = trace)) +
+p1 = ggplot(plot_data, aes(x = frequency, y = trace)) +
   geom_line(color = "steelblue", linewidth = 0.8) +
   labs(
     title = "Trace of Spectral Density Matrix",
@@ -162,13 +149,36 @@ p1 <- ggplot(plot_data, aes(x = frequency, y = trace)) +
 
 print(p1)
 
+
+plot_data_smooth = data.frame(
+  frequency = frequencies,
+  trace = Re(trace_smooth),
+  var1 = Re(diag_smooth[, 1]),
+  var2 = Re(diag_smooth[, 2]),
+  var3 = Re(diag_smooth[, 3]),
+  largest_eig = largest_eig_smooth,
+  cond_num = condition_number_smooth
+)
+
+p1_smooth = ggplot(plot_data_smooth, aes(x = frequency, y = trace)) +
+  geom_line(color = "darkgreen", linewidth = 0.8) +
+  labs(
+    title = "Trace of Smoothed Spectral Density Matrix",
+    subtitle = "Total power across all 3 variables (kernel-smoothed)",
+    x = "Frequency (cycles per observation)",
+    y = "Trace(S(ω))"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+print(p1_smooth)
+
+
 composite_value = trace_periodogram / condition_number
 which.max(composite_value)
 
 composite_smooth = trace_smooth / condition_number_smooth
-chosen_freq = return_max(composite_smooth ,M)
-
-chosen_ks = chosen_freq / n
-
-
+chosen_freq = return_max(composite_smooth , M)
+sort(composite_smooth, decreasing = TRUE )
+k_freq = chosen_freq / n
 
