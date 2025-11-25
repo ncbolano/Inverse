@@ -53,6 +53,31 @@ smoothed_spectral_density = function(JJ, k, M, Kernel_func = Kernel_Triangular) 
   
   return(S_k)
 }
+
+return_max = function(x, M) {
+  max1 = which.max(x)
+  
+  # Create a copy and set values within 2*M of max1 to -Inf
+  x2 = x
+  min_dist = 2 * M
+  
+  # Set forbidden region to -Inf
+  forbidden_indices = max(1, max1 - min_dist):min(length(x), max1 + min_dist)
+  x2[forbidden_indices] = -Inf
+  
+  # Find second maximum (at least 2*M away)
+  max2 = which.max(x2)
+  
+  # Validity check of existing other point to prevent breakdown for M > n/4
+  if (is.infinite(x2[max2])) {
+    warning("No valid second maximum found at distance >= 2*M")
+    return(c(max1, NA))
+  }
+  
+  return(c(max1, max2))
+}
+
+
 library(ggplot2)
 # Trace example
 R <- 500 # number of replications
@@ -99,6 +124,8 @@ for (k in 1:n_freq) {
   largest_eigenvalue[k] = max(eigenvals)
   condition_number[k] = max(eigenvals) / (min(eigenvals) + 1e-10)
   
+  # Smoothed Periodogram (weighted by kernel)
+  S_k = smoothed_spectral_density(JJ, k, M, Kernel_Triangular)
   # Smoothed Versions
   trace_smooth[k] = sum(diag(S_k))
   diag_smooth[k, ] = diag(S_k)
@@ -109,7 +136,7 @@ for (k in 1:n_freq) {
   condition_number_smooth[k] = max(eigenvals_smooth) / (min(eigenvals_smooth) + 1e-10)
 }
 
-frequencies = (n_freq+1:n) / n  # Normalized frequencies [0, 0.5]
+frequencies = (1:n_freq) / n  
 
 plot_data = data.frame(
   frequency = frequencies,
@@ -137,6 +164,9 @@ print(p1)
 
 composite_value = trace_periodogram / condition_number
 which.max(composite_value)
-composite_value
 
 composite_smooth = trace_smooth / condition_number_smooth
+return_max(composite_smooth ,M)
+
+
+
