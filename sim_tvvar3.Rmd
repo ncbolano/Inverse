@@ -23,9 +23,9 @@ if(!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 # DEFINE PARAMETER GRID
 # ============================================================================
 # Define lists of values to iterate over
-n_list = c(2^11, 2^12)
-M_list = c(30, 60)
-TV_size_list = c(0.2, 0.4, 0.6)
+n_list = c(2^11 , 2^12)
+M_list = c(30)
+TV_size_list = c(0.6)
 L_list = c(1, 2)
 
 # For ks, we need to generate them based on n and M
@@ -111,7 +111,8 @@ run_simulation = function(n, M, TV_size, L, nu = 2, p = 3, R = 500,
   })
   
   # Generate ks for this combination
-  ks = generate_ks(n, M)
+  #ks = generate_ks(n, M)
+  ks = (k_freq * n) + (n/2)
   
   # Calculate coefficient number
   coefnum = (p * 2 * nu + p - 1)
@@ -342,7 +343,12 @@ graph_recovery = function(Test_tibble, alpha = 0.05) {
 }
 ```
 
+
 ```{r}
+
+
+#DO NOT RUN 
+
 # ============================================================================
 # MAIN LOOP - WITH MASTER RESULTS TABLE (PERFECT RECOVERY ONLY)
 # ============================================================================
@@ -350,7 +356,6 @@ graph_recovery = function(Test_tibble, alpha = 0.05) {
 # Initialize master results table
 master_results = tibble()
 
-cat("Starting parameter sweep...\n")
 cat("Total combinations:", nrow(param_grid), "\n\n")
 
 for (idx in 1:nrow(param_grid)) {
@@ -360,7 +365,7 @@ for (idx in 1:nrow(param_grid)) {
   TV_size = params$TV_size
   L = params$L
   
-  filename = sprintf('ktest__n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
+  filename = sprintf('ks__n_%i_M_%i_nu_%i_L_%i_TV_%0.2f_%s.rds',
                       n, M, nu, L, TV_size, Kernel)
   filepath = file.path(output_dir, filename)
   
@@ -385,12 +390,12 @@ for (idx in 1:nrow(param_grid)) {
       cat("  - Saving results...\n")
       saveRDS(overall_accuracy, file = filepath)
       
-      cat(sprintf("  ✓ Saved: %s\n", filename))
+      cat(sprintf("Saved: %s\n", filename))
       print(overall_accuracy)
       cat("\n")
       
     }, error = function(e) {
-      cat(sprintf("  ✗ Error: %s\n", e$message))
+      cat(sprintf("Error: %s\n", e$message))
       cat("\n")
       overall_accuracy = NULL  # Set to NULL on error
     })
@@ -414,22 +419,94 @@ for (idx in 1:nrow(param_grid)) {
     master_results = bind_rows(master_results, result_row)
   }
 }
-master_results_ktest = master_results[ , c(1:9)]
+master_results_ks = master_results[ , c(1:9)]
 # Save master results table
 master_results_file = file.path(output_dir, "master_results_table.rds")
-saveRDS(master_results_ktest, file = master_results_file)
+saveRDS(master_results_ks_chosen, file = master_results_file)
 
 # Also save as CSV for easy viewing
 master_results_csv = file.path(output_dir, "master_results_table.csv")
-write_csv(master_results_ktest, file = master_results_csv)
+write_csv(master_results_ks, file = master_results_csv)
 
 cat("Parameter sweep complete!\n")
 cat("Results saved to:", output_dir, "\n")
 cat("\n=== MASTER RESULTS TABLE (Perfect Recovery Only) ===\n")
-print(master_results_ktest)
+print(master_results_ks)
 
 cat("\nMaster results saved to:\n")
 cat("  - RDS:", master_results_file, "\n")
 cat("  - CSV:", master_results_csv, "\n")                                                                                                 
+```
+
+
+```{r}
+# ============================================================================
+# MAIN LOOP - WITH MASTER RESULTS TABLE ONLY (NO INDIVIDUAL FILES)
+# ============================================================================
+
+# Initialize master results table
+master_results = tibble()
+
+cat("Total combinations:", nrow(param_grid), "\n\n")
+
+for (idx in 1:nrow(param_grid)) {
+  params = param_grid[idx, ]
+  n = params$n
+  M = params$M
+  TV_size = params$TV_size
+  L = params$L
+  
+  cat(sprintf("[%d/%d] Running: n=%d, M=%d, TV_size=%.2f, L=%d\n",
+              idx, nrow(param_grid), n, M, TV_size, L))
+  
+  tryCatch({
+    Test_tibble = run_simulation(n = n, M = M, TV_size = TV_size, L = L,
+                                   nu = nu, p = p, R = R, Kernel = Kernel)
+    
+    cat("  - Starting graph recovery\n")
+    overall_accuracy = graph_recovery(Test_tibble, alpha = alpha)
+    
+    print(overall_accuracy)
+    cat("\n")
+    
+    # Add to master results
+    result_row = overall_accuracy |>
+      select(Method, Perfect_Recovery) |>
+      mutate(
+        n = n,
+        M = M,
+        TV_size = TV_size,
+        L = L,
+        nu = nu,
+        R = R,
+        Kernel = Kernel,
+        alpha = alpha
+      )
+    
+    master_results = bind_rows(master_results, result_row)
+    
+    cat(sprintf("Completed iteration %d/%d\n\n", idx, nrow(param_grid)))
+    
+  }, error = function(e) {
+    cat(sprintf("Error: %s\n", e$message))
+    cat("\n")
+  })
+}
+
+# Save master results table ONLY
+master_results_file = file.path(output_dir, "master_results_table_ks_.6.rds")
+saveRDS(master_results, file = master_results_file)
+
+# Also save as CSV for easy viewing
+master_results_csv = file.path(output_dir, "master_results_table_ks_.6.csv")
+write_csv(master_results, file = master_results_csv)
+
+cat("Results saved to:", output_dir, "\n")
+cat("\n=== MASTER RESULTS TABLE (Perfect Recovery Only) ===\n")
+print(master_results)
+
+cat("\nMaster results saved to:\n")
+cat("  - RDS:", master_results_file, "\n")
+cat("  - CSV:", master_results_csv, "\n")
 ```
 
